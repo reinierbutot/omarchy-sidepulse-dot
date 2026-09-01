@@ -1,0 +1,36 @@
+{
+  "schemaVersion": 1,
+  "id": "reinier.sidepulse-dot",
+  "name": "SidePulse Dot",
+  "version": "1.0.0",
+  "author": "reinier",
+  "license": "MIT",
+  "description": "Drive and test a SidePulse Dot (tiny two-LED USB device) from an Omarchy bar panel. Shows whether the Dot is mounted, and offers color swatches, animation presets, a brightness slider, and a custom LED-program field that write straight to the device's LEDS.LED file.",
+  "kinds": ["bar-widget"],
+  "activation": "on-demand",
+  "entryPoints": {
+    "barWidget": "Panel.qml"
+  },
+  "barWidget": {
+    "displayName": "SidePulse Dot",
+    "description": "Bar icon reflecting the Dot's connection state, plus a panel with color swatches, animation presets, brightness, and a custom LED-program editor to test the device.",
+    "category": "Hardware",
+    "aliases": ["sidepulse", "sidepulse-dot", "pulsedot", "led"],
+    "allowMultiple": false,
+    "defaultSection": "right",
+    "defaults": {
+      "pollIntervalSec": 5
+    },
+    "schema": [
+      {
+        "key": "pollIntervalSec",
+        "type": "integer",
+        "label": "Device poll interval (seconds)",
+        "min": 2,
+        "max": 60,
+        "step": 1,
+        "defaultValue": 5
+      }
+    ]
+  }
+}

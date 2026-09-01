@@ -1,0 +1,512 @@
+#!/usr/bin/env bash
+# SidePulse Dot — coding-agent state bridge.
+#
+# Coding agents (agy, grok, junie, opencode, ...) report their current state
+# here; the Omarchy panel polls the merged "effective" state and lights the
+# Dots with the colour/pattern the user mapped to it.
+#
+#   sidepulse-agent report <agent> <state>   # push a state (called from hooks)
+#   sidepulse-agent effective                # -> {"ok":true,"effective":"waiting",...}
+#   sidepulse-agent list                     # -> per-agent current state
+#   sidepulse-agent config-get               # -> the reactions config (JSON)
+#   sidepulse-agent config-set '<json>'      # persist a reactions config
+#   sidepulse-agent install-hooks            # wire opencode/grok/... to report
+#
+# State names are normalised to: working | waiting | done | idle | error.
+# A push older than STALE_SECS is treated as idle. junie has no command hook,
+# so its state is read live from its session event log.
+set -euo pipefail
+
+KNOWN_AGENTS=(agy grok junie opencode)
+STALE_SECS=${SIDEPULSE_AGENT_STALE:-300}
+
+state_home=${XDG_STATE_HOME:-$HOME/.local/state}
+STATE_DIR="$state_home/sidepulse-dot"
+AGENT_DIR="$STATE_DIR/agents"
+config_home=${XDG_CONFIG_HOME:-$HOME/.config}
+CONFIG_DIR="$config_home/sidepulse-dot"
+CONFIG_FILE="$CONFIG_DIR/reactions.json"
+
+self_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+BRIDGE="$self_dir/sidepulse-agent"
+
+now() { date +%s; }
+
+json_escape() {
+    local s=$1
+    s=${s//\\/\\\\}
+    s=${s//\"/\\\"}
+    s=${s//$'\n'/\\n}
+    s=${s//$'\r'/}
+    s=${s//$'\t'/\\t}
+    printf '%s' "$s"
+}
+
+# Map an agent's raw status word to our canonical state.
+normalize_state() {
+    local s
+    s=$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')
+    case "$s" in
+        working|busy|thinking|running|in_progress|inprogress|tool|tooluse|\
+        pretooluse|active|start|started|generating|streaming|prompt|\
+        userpromptsubmit)
+            echo working ;;
+        waiting|wait|ask|input|input_required|inputrequired|notification|\
+        permission|permission_ask|approval|needsinput|blocked|paused|confirm)
+            echo waiting ;;
+        done|complete|completed|finished|finish|success|stop|end|sessionend|\
+        idle_done|ready|responded)
+            echo done ;;
+        error|failed|failure|fail|crash|crashed|denied|aborted)
+            echo error ;;
+        idle|off|none|inactive|sessionstart)
+            echo idle ;;
+        *) echo "" ;;
+    esac
+}
+
+# state priority: higher wins when several agents are active at once.
+state_rank() {
+    case "$1" in
+        error) echo 4 ;;
+        waiting) echo 3 ;;
+        working) echo 2 ;;
+        done) echo 1 ;;
+        *) echo 0 ;;
+    esac
+}
+
+# ---- report -------------------------------------------------------------
+report() {
+    local agent=$1 raw=${2:-} state
+    agent=$(printf '%s' "$agent" | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9._-')
+    [ -n "$agent" ] || { echo '{"ok":false,"error":"missing agent"}'; return 0; }
+    state=$(normalize_state "$raw")
+    [ -n "$state" ] || state=working
+    mkdir -p "$AGENT_DIR"
+    printf '%s %s\n' "$state" "$(now)" > "$AGENT_DIR/$agent.tmp"
+    mv -f "$AGENT_DIR/$agent.tmp" "$AGENT_DIR/$agent"
+    printf '{"ok":true,"agent":"%s","state":"%s"}\n' "$agent" "$state"
+}
+
+# Read one agent's stored state; echoes "state age" or nothing if stale/absent.
+stored_state() {
+    local agent=$1 f="$AGENT_DIR/$1" line st ts age
+    [ -f "$f" ] || return 0
+    line=$(cat "$f" 2>/dev/null) || return 0
+    st=${line%% *}; ts=${line##* }
+    [ -n "$st" ] && [ -n "$ts" ] || return 0
+    age=$(( $(now) - ts ))
+    [ "$age" -lt 0 ] && age=0
+    if [ "$st" != idle ] && [ "$age" -ge "$STALE_SECS" ]; then
+        echo "idle $age"; return 0
+    fi
+    echo "$st $age"
+}
+
+# junie exposes no command hook, but writes a session event log we can read.
+junie_state() {
+    local base="$HOME/.junie/sessions" newest raw st mt age
+    [ -d "$base" ] || return 0
+    newest=$(ls -1dt "$base"/*/events.jsonl 2>/dev/null | head -n1) || return 0
+    [ -n "$newest" ] && [ -f "$newest" ] || return 0
+    mt=$(stat -c %Y "$newest" 2>/dev/null) || return 0
+    age=$(( $(now) - mt ))
+    [ "$age" -lt 0 ] && age=0
+    if [ "$age" -ge "$STALE_SECS" ]; then echo "idle $age"; return 0; fi
+    raw=$(tail -c 200000 "$newest" 2>/dev/null | grep -oE '"state":"[A-Z_]+"' | tail -n1)
+    raw=${raw##*:\"}; raw=${raw%\"}
+    st=$(normalize_state "$raw")
+    [ -n "$st" ] || st=idle
+    echo "$st $age"
+}
+
+# grok (xAI CLI) writes its config-file hooks but they do not reliably fire,
+# so we read its live session event log instead (same approach as junie). Each
+# session logs to ~/.grok/sessions/<cwd>/<id>/events.jsonl with typed events:
+#   turn_ended{outcome}  -> done / error
+#   permission_requested / permission_resolved (unresolved) -> waiting
+#   phase_changed{phase=permission_prompt} -> waiting
+#   phase_changed{phase=streaming_*|tool_execution|waiting_for_model} -> working
+grok_state() {
+    local base="$HOME/.grok/sessions" newest mt age tailbuf last phase lreq lres
+    [ -d "$base" ] || return 0
+    newest=$(ls -1dt "$base"/*/*/events.jsonl 2>/dev/null | head -n1) || return 0
+    [ -n "$newest" ] && [ -f "$newest" ] || return 0
+    mt=$(stat -c %Y "$newest" 2>/dev/null) || return 0
+    age=$(( $(now) - mt ))
+    [ "$age" -lt 0 ] && age=0
+    if [ "$age" -ge "$STALE_SECS" ]; then echo "idle $age"; return 0; fi
+    tailbuf=$(tail -n 60 "$newest" 2>/dev/null)
+    [ -n "$tailbuf" ] || { echo "idle $age"; return 0; }
+    # The final event drives the state: a turn that ended is done (or error).
+    last=$(printf '%s\n' "$tailbuf" | tail -n1)
+    if printf '%s' "$last" | grep -q '"type":"turn_ended"'; then
+        if printf '%s' "$last" | grep -qE '"outcome":"(completed|complete|success|done|ok)"'; then
+            echo "done $age"; return 0
+        fi
+        if printf '%s' "$last" | grep -qE '"outcome":"(cancelled|canceled|interrupted|aborted)"'; then
+            echo "idle $age"; return 0
+        fi
+        echo "error $age"; return 0
+    fi
+    # A permission prompt still open (requested with no later resolve) = waiting.
+    lreq=$(printf '%s\n' "$tailbuf" | grep -n '"type":"permission_requested"' | tail -n1 | cut -d: -f1)
+    lres=$(printf '%s\n' "$tailbuf" | grep -n '"type":"permission_resolved"' | tail -n1 | cut -d: -f1)
+    if [ -n "$lreq" ] && { [ -z "$lres" ] || [ "$lreq" -gt "$lres" ]; }; then
+        echo "waiting $age"; return 0
+    fi
+    # Otherwise fall back to the most recent phase.
+    phase=$(printf '%s\n' "$tailbuf" | grep -oE '"phase":"[a-z_]+"' | tail -n1)
+    phase=${phase##*:\"}; phase=${phase%\"}
+    case "$phase" in
+        permission_prompt) echo "waiting $age" ;;
+        "") echo "working $age" ;;
+        *) echo "working $age" ;;
+    esac
+    return 0
+}
+
+# agy (Google Antigravity CLI) exposes no simple state file, but it keeps a
+# live activity trail under ~/.gemini/antigravity-cli. Very recent writes mean
+# it is actively working; when quiet we defer to any pushed hook state (below).
+agy_state() {
+    local base="$HOME/.gemini/antigravity-cli" f mt newest=0 age win
+    [ -d "$base" ] || return 0
+    for f in "$base/cli.log" "$base/history.jsonl" "$base"/conversations/*.db; do
+        [ -e "$f" ] || continue
+        mt=$(stat -L -c %Y "$f" 2>/dev/null) || continue
+        [ -n "$mt" ] && [ "$mt" -gt "$newest" ] && newest=$mt
+    done
+    [ "$newest" -gt 0 ] || return 0
+    age=$(( $(now) - newest ))
+    [ "$age" -lt 0 ] && age=0
+    win=${SIDEPULSE_AGY_WINDOW:-25}
+    if [ "$age" -le "$win" ]; then echo "working $age"; fi
+}
+
+# Resolve the current state for one agent (file-watch agents override store).
+agent_state() {
+    local agent=$1 res pushed fw page win
+    case "$agent" in
+        junie)
+            res=$(junie_state)
+            # If the file-watch agent yielded nothing, fall back to a push.
+            [ -n "$res" ] || res=$(stored_state "$agent")
+            ;;
+        grok)
+            # grok's config hooks do not reliably fire, so read its live event
+            # log; prefer a fresh pushed state if a hook ever does report.
+            pushed=$(stored_state "$agent")
+            fw=$(grok_state)
+            if [ -n "$pushed" ]; then page=${pushed##* }; else page=99999; fi
+            if [ -n "$pushed" ] && [ "${page:-99999}" -le 30 ]; then
+                res=$pushed
+            elif [ -n "$fw" ]; then
+                res=$fw
+            else
+                res=$pushed
+            fi
+            ;;
+        agy)
+            # Prefer a fresh, precise pushed state (from agy's Stop/PreInvocation
+            # hooks: done/error/working); otherwise infer "working" from live
+            # file activity so a running agy is detected even without hooks.
+            pushed=$(stored_state "$agent")
+            fw=$(agy_state)
+            win=${SIDEPULSE_AGY_WINDOW:-25}
+            if [ -n "$pushed" ]; then page=${pushed##* }; else page=99999; fi
+            if [ -n "$pushed" ] && [ "${page:-99999}" -le "$win" ]; then
+                res=$pushed
+            elif [ -n "$fw" ]; then
+                res=$fw
+            else
+                res=$pushed
+            fi
+            ;;
+        *)     res=$(stored_state "$agent") ;;
+    esac
+    echo "$res"
+}
+
+# ---- effective / list ---------------------------------------------------
+collect() {
+    # Prints "agent state age" lines for every known agent that has a state.
+    local a res st age
+    local -A seen=()
+    for a in "${KNOWN_AGENTS[@]}"; do
+        res=$(agent_state "$a") || res=""
+        seen[$a]=1
+        [ -n "$res" ] || continue
+        st=${res%% *}; age=${res##* }
+        printf '%s %s %s\n' "$a" "$st" "$age"
+    done
+    # Any extra agents that reported but are not in the known list.
+    if [ -d "$AGENT_DIR" ]; then
+        for f in "$AGENT_DIR"/*; do
+            [ -f "$f" ] || continue
+            a=$(basename "$f")
+            [ -n "${seen[$a]:-}" ] && continue
+            res=$(stored_state "$a") || res=""
+            [ -n "$res" ] || continue
+            st=${res%% *}; age=${res##* }
+            printf '%s %s %s\n' "$a" "$st" "$age"
+        done
+    fi
+}
+
+emit_effective() {
+    local eff=idle effagent="" bestrank=-1 rank
+    local a st age first=1 out=""
+    while read -r a st age; do
+        [ -n "$a" ] || continue
+        [ $first -eq 1 ] || out+=","
+        first=0
+        out+=$(printf '{"name":"%s","state":"%s","age":%s}' \
+            "$(json_escape "$a")" "$(json_escape "$st")" "${age:-0}")
+        rank=$(state_rank "$st")
+        # Prefer higher rank; break ties by the more recent (smaller age).
+        if [ "$rank" -gt "$bestrank" ]; then
+            bestrank=$rank; eff=$st; effagent=$a
+        fi
+    done < <(collect)
+    printf '{"ok":true,"effective":"%s","agent":"%s","agents":[%s]}\n' \
+        "$eff" "$(json_escape "$effagent")" "$out"
+}
+
+# ---- reactions config ---------------------------------------------------
+default_config() {
+    cat <<'JSON'
+{
+  "enabled": false,
+  "target": "inherit",
+  "mode": "merged",
+  "ui": {
+    "target": "all",
+    "hex": "#00c8ff",
+    "mode": "",
+    "brightness": 255
+  },
+  "programs": {
+    "working": "off\n#00c8ff 1.6s pulse\nrepeat",
+    "waiting": "#ff8a00 400ms none\noff 400ms none\nrepeat",
+    "done": "#00ff66",
+    "error": "#ff0000 150ms none\noff 150ms none\nrepeat",
+    "idle": "off"
+  },
+  "styles": {
+    "working": { "hex": "#00c8ff", "anim": "pulse", "brightness": 255 },
+    "waiting": { "hex": "#ff8a00", "anim": "blink", "brightness": 255 },
+    "done": { "hex": "#00ff66", "anim": "solid", "brightness": 255 },
+    "error": { "hex": "#ff0000", "anim": "fastblink", "brightness": 255 },
+    "idle": { "hex": "", "anim": "solid", "brightness": 255 }
+  }
+}
+JSON
+}
+
+config_get() {
+    if [ -s "$CONFIG_FILE" ]; then
+        cat "$CONFIG_FILE"
+    else
+        default_config
+    fi
+}
+
+config_set() {
+    local json=$1
+    [ -n "$json" ] || { echo '{"ok":false,"error":"empty config"}'; return 0; }
+    # Validate JSON if a parser is around; otherwise store as-is.
+    if command -v python3 >/dev/null 2>&1; then
+        if ! printf '%s' "$json" | python3 -c 'import sys,json; json.load(sys.stdin)' 2>/dev/null; then
+            echo '{"ok":false,"error":"invalid JSON"}'; return 0
+        fi
+    fi
+    mkdir -p "$CONFIG_DIR"
+    printf '%s' "$json" > "$CONFIG_FILE.tmp"
+    mv -f "$CONFIG_FILE.tmp" "$CONFIG_FILE"
+    echo '{"ok":true}'
+}
+
+# ---- hook installation --------------------------------------------------
+install_opencode() {
+    local dir="${XDG_CONFIG_HOME:-$HOME/.config}/opencode/plugin"
+    local file="$dir/sidepulse-dot.js"
+    mkdir -p "$dir"
+    cat > "$file" <<JS
+// Auto-generated by sidepulse-agent install-hooks.
+// Reports opencode's turn state to the SidePulse Dot bridge so the Dots can
+// react to it. Safe to delete; regenerate with \`sidepulse-agent install-hooks\`.
+const BRIDGE = ${BRIDGE@Q};
+
+export const SidepulseDot = async ({ \$ }) => {
+  const report = (state) => {
+    try { \$\`\${BRIDGE} report opencode \${state}\`.quiet().nothrow(); } catch (e) {}
+  };
+  return {
+    "chat.message":       async () => report("working"),
+    "chat.params":        async () => report("working"),
+    "tool.execute.before":async () => report("working"),
+    "permission.ask":     async () => report("waiting"),
+    event: async ({ event }) => {
+      const t = event && event.type;
+      if (t === "session.idle") report("done");
+      else if (t === "session.error") report("error");
+    },
+  };
+};
+JS
+    echo "opencode: $file"
+}
+
+install_grok() {
+    local cfg="$HOME/.grok/config.toml"
+    [ -f "$cfg" ] || { echo "grok: config.toml not found (skipped)"; return 0; }
+    if grep -q 'sidepulse-agent report grok' "$cfg" 2>/dev/null; then
+        echo "grok: already wired"
+        return 0
+    fi
+    cp -f "$cfg" "$cfg.sidepulse.bak.$(date +%s)" 2>/dev/null || true
+    cat >> "$cfg" <<TOML
+
+# --- SidePulse Dot: report grok's state to the LED bridge (auto-generated) ---
+[[hooks.UserPromptSubmit]]
+  [[hooks.UserPromptSubmit.hooks]]
+  type = "command"
+  command = "$BRIDGE report grok working"
+  timeout = 5
+[[hooks.PreToolUse]]
+matcher = ".*"
+  [[hooks.PreToolUse.hooks]]
+  type = "command"
+  command = "$BRIDGE report grok working"
+  timeout = 5
+[[hooks.Notification]]
+  [[hooks.Notification.hooks]]
+  type = "command"
+  command = "$BRIDGE report grok waiting"
+  timeout = 5
+[[hooks.Stop]]
+  [[hooks.Stop.hooks]]
+  type = "command"
+  command = "$BRIDGE report grok done"
+  timeout = 5
+[[hooks.SessionEnd]]
+  [[hooks.SessionEnd.hooks]]
+  type = "command"
+  command = "$BRIDGE report grok idle"
+  timeout = 5
+# --- end SidePulse Dot ---
+TOML
+    echo "grok: appended hooks to $cfg"
+}
+
+# agy (Google Antigravity CLI): install lifecycle hooks into the global
+# customization root (~/.gemini/config/hooks.json). We use only the safe,
+# non-gating events (PreInvocation/PostToolUse -> working, Stop -> done|error),
+# each returning an empty JSON object so the agent loop is never altered.
+install_agy() {
+    local dir="$HOME/.gemini/config"
+    local file="$dir/hooks.json"
+    [ -d "$HOME/.gemini" ] || { echo "agy: ~/.gemini not found (skipped)"; return 0; }
+    mkdir -p "$dir"
+    local block
+    block=$(cat <<JSON
+{
+  "PreInvocation": [
+    { "type": "command", "command": "$BRIDGE agy-hook preinvocation", "timeout": 5 }
+  ],
+  "PostToolUse": [
+    { "matcher": "*", "hooks": [ { "type": "command", "command": "$BRIDGE agy-hook posttooluse", "timeout": 5 } ] }
+  ],
+  "Stop": [
+    { "type": "command", "command": "$BRIDGE agy-hook stop", "timeout": 5 }
+  ]
+}
+JSON
+)
+    # Merge our named entry into any existing hooks.json without clobbering it.
+    if command -v python3 >/dev/null 2>&1; then
+        SP_FILE="$file" SP_BLOCK="$block" python3 - <<'PY'
+import json, os
+path = os.environ["SP_FILE"]
+block = json.loads(os.environ["SP_BLOCK"])
+try:
+    with open(path) as f:
+        data = json.load(f)
+    if not isinstance(data, dict):
+        data = {}
+except Exception:
+    data = {}
+if data.get("sidepulse-dot") != block:
+    if os.path.exists(path):
+        try:
+            import time, shutil
+            shutil.copy2(path, path + ".sidepulse.bak." + str(int(time.time())))
+        except Exception:
+            pass
+    data["sidepulse-dot"] = block
+    with open(path, "w") as f:
+        json.dump(data, f, indent=2)
+        f.write("\n")
+PY
+        echo "agy: wired hooks in $file"
+    else
+        printf '{\n  "sidepulse-dot": %s\n}\n' "$block" > "$file"
+        echo "agy: wrote $file"
+    fi
+}
+
+install_hooks() {
+    local first=1 out=""
+    add() { [ $first -eq 1 ] || out+=","; first=0; out+="\"$(json_escape "$1")\""; }
+    add "$(install_opencode)"
+    add "$(install_grok)"
+    add "junie: reads ~/.junie/sessions (no install needed)"
+    add "$(install_agy)"
+    printf '{"ok":true,"results":[%s]}\n' "$out"
+}
+
+# Invoked by agy's lifecycle hooks: read the event payload on stdin, push the
+# mapped state, and echo the empty JSON object the hook contract expects.
+agy_hook() {
+    local event=${1:-} payload state reason
+    payload=$(cat 2>/dev/null || true)
+    case "$event" in
+        stop)
+            reason=$(printf '%s' "$payload" | grep -oE '"terminationReason":"[^"]*"' | head -1)
+            reason=${reason##*:\"}; reason=${reason%\"}
+            if printf '%s' "$payload" | grep -qE '"error":"[^"]' || [ "$reason" = error ]; then
+                state=error
+            else
+                state=done
+            fi
+            ;;
+        *) state=working ;;
+    esac
+    report agy "$state" >/dev/null 2>&1 || true
+    printf '{}\n'
+}
+
+# ---- dispatch -----------------------------------------------------------
+cmd=${1:-effective}
+shift || true
+case "$cmd" in
+    report)        report "${1:-}" "${2:-}" ;;
+    effective)     emit_effective ;;
+    list)          emit_effective ;;
+    config-get)    config_get ;;
+    config-set)    config_set "${1:-}" ;;
+    install-hooks) install_hooks ;;
+    agy-hook)      agy_hook "${1:-}" ;;
+    *)
+        # Shorthand: `sidepulse-agent <agent> <state>`.
+        st=$(normalize_state "${1:-}")
+        if [ -n "$st" ] || [ -n "${1:-}" ]; then
+            report "$cmd" "${1:-}"
+        else
+            printf '{"ok":false,"error":"unknown command: %s"}\n' "$(json_escape "$cmd")"
+            exit 2
+        fi
+        ;;
+esac

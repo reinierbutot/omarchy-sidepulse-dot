@@ -1,0 +1,209 @@
+#!/usr/bin/env bash
+# Self-contained SidePulse Dot helper for the Omarchy bar plugin.
+#
+# The SidePulse Dot needs no drivers: it mounts as a tiny FAT volume and you
+# control its LEDs by writing an LED-DSL program to the LEDS.LED file on it.
+# This helper finds every mounted Dot, and prints/writes machine-readable JSON
+# so the QML panel can drive one, another, or all of them and show status.
+#
+#   sidepulse-dot list                       # -> {"ok":true,"devices":[{...},{...}]}
+#   sidepulse-dot status [--device PATH]      # -> {"ok":true,"mounted":true,...}
+#   sidepulse-dot write "<program>" [--device PATH ...] [--all]
+#   sidepulse-dot off [--device PATH ...] [--all]
+#
+# --device may be given more than once to target several Dots at once; --all
+# (the default when no --device is passed) targets every mounted Dot. A write
+# to multiple devices returns {"ok":...,"count":N,"results":[{device,ok},...]}.
+# All output is a single JSON object on stdout.
+set -euo pipefail
+
+json_escape() {
+    # Escape a string for embedding in JSON.
+    local s=$1
+    s=${s//\\/\\\\}
+    s=${s//\"/\\\"}
+    s=${s//$'\n'/\\n}
+    s=${s//$'\r'/}
+    s=${s//$'\t'/\\t}
+    printf '%s' "$s"
+}
+
+# Print the path of every mounted SidePulse volume, one per line. Dots mount
+# their FAT volume as "PulseDot" (second and later ones as "PulseDot1", ...).
+# Output is sorted by serial so device order is stable across replug/remount.
+find_devices() {
+    local base name paths=()
+    for base in "/run/media/$USER" "/media/$USER" /run/media/* /media/* /mnt; do
+        [ -d "$base" ] || continue
+        for name in "$base"/*; do
+            [ -d "$name" ] || continue
+            [ -f "$name/LEDS.LED" ] && [ -f "$name/STATUS.TXT" ] || continue
+            case "$(basename "$name")" in
+                PulseDot|SidePulse*|*PulseDot*|*SidePulse*) paths+=("$name") ;;
+            esac
+        done
+    done
+    # Fallback: any mount with both marker files, even under an odd name.
+    if [ ${#paths[@]} -eq 0 ]; then
+        for base in "/run/media/$USER" "/media/$USER" /run/media/* /media/* /mnt; do
+            [ -d "$base" ] || continue
+            for name in "$base"/*; do
+                [ -d "$name" ] || continue
+                [ -f "$name/LEDS.LED" ] && [ -f "$name/STATUS.TXT" ] && paths+=("$name")
+            done
+        done
+    fi
+    [ ${#paths[@]} -gt 0 ] || return 1
+    # De-duplicate and sort by serial (falls back to path when serial is empty).
+    local p ser
+    for p in "${paths[@]}"; do
+        ser=$(status_field "$p" serial)
+        printf '%s\t%s\n' "${ser:-zzzz-$p}" "$p"
+    done | sort -u | awk -F'\t' '!seen[$2]++ {print $2}'
+}
+
+# The first mounted device (used when no --device is given for status).
+find_device() {
+    find_devices | head -n1
+}
+
+status_field() {
+    # Read one whitespace-separated field from STATUS.TXT (NULs stripped).
+    local dev=$1 key=$2
+    [ -f "$dev/STATUS.TXT" ] || return 0
+    tr -d '\000' < "$dev/STATUS.TXT" | awk -v k="$key" '$1==k {print $2; exit}'
+}
+
+device_json() {
+    # Emit a JSON object describing one device path.
+    local dev=$1 fw serial state leds
+    fw=$(status_field "$dev" app_version)
+    serial=$(status_field "$dev" serial)
+    state=$(status_field "$dev" fw_state)
+    leds=$(status_field "$dev" leds_size)
+    printf '{"ok":true,"mounted":true,"device":"%s","firmware":"%s","serial":"%s","fwState":"%s","leds":"%s"}' \
+        "$(json_escape "$dev")" "$(json_escape "$fw")" "$(json_escape "$serial")" \
+        "$(json_escape "$state")" "$(json_escape "$leds")"
+}
+
+emit_list() {
+    local first=1 dev
+    printf '{"ok":true,"devices":['
+    while IFS= read -r dev; do
+        [ -n "$dev" ] || continue
+        [ $first -eq 1 ] || printf ','
+        first=0
+        device_json "$dev"
+    done < <(find_devices 2>/dev/null || true)
+    printf ']}\n'
+}
+
+emit_status() {
+    local dev=${1:-}
+    if [ -z "$dev" ]; then
+        if ! dev=$(find_device 2>/dev/null); then
+            printf '{"ok":true,"mounted":false}\n'
+            return 0
+        fi
+    fi
+    if [ ! -f "$dev/LEDS.LED" ]; then
+        printf '{"ok":true,"mounted":false}\n'
+        return 0
+    fi
+    device_json "$dev"
+    printf '\n'
+}
+
+write_one() {
+    # Write a decoded program to a single device. Echoes "ok" or "fail".
+    local dev=$1 decoded=$2
+    if printf '%s' "$decoded" > "$dev/LEDS.LED" 2>/dev/null; then
+        sync 2>/dev/null || true
+        echo ok
+    else
+        echo fail
+    fi
+}
+
+write_program() {
+    local program=$1
+    shift
+    local -a targets=("$@")
+    # No explicit targets -> every mounted device.
+    if [ ${#targets[@]} -eq 0 ]; then
+        local dev
+        while IFS= read -r dev; do
+            [ -n "$dev" ] && targets+=("$dev")
+        done < <(find_devices 2>/dev/null || true)
+    fi
+    if [ ${#targets[@]} -eq 0 ]; then
+        printf '{"ok":false,"mounted":false,"count":0,"error":"No mounted SidePulse device found."}\n'
+        return 0
+    fi
+    # Decode \n / \t escapes into real bytes; the controller wants real newlines.
+    local decoded
+    decoded=$(printf '%b' "$program")
+    case "$decoded" in
+        *$'\n') : ;;
+        *) decoded="$decoded"$'\n' ;;
+    esac
+    local dev res ok_all=1 count=0 first=1 out=""
+    for dev in "${targets[@]}"; do
+        [ -f "$dev/LEDS.LED" ] || { ok_all=0; continue; }
+        res=$(write_one "$dev" "$decoded")
+        count=$((count + 1))
+        [ "$res" = ok ] || ok_all=0
+        [ $first -eq 1 ] || out+=","
+        first=0
+        out+=$(printf '{"device":"%s","ok":%s}' "$(json_escape "$dev")" \
+            "$([ "$res" = ok ] && echo true || echo false)")
+    done
+    if [ "$ok_all" = 1 ] && [ "$count" -gt 0 ]; then
+        printf '{"ok":true,"mounted":true,"count":%s,"results":[%s]}\n' "$count" "$out"
+    else
+        printf '{"ok":false,"mounted":true,"count":%s,"results":[%s],"error":"Write to LEDS.LED failed on one or more devices."}\n' "$count" "$out"
+    fi
+}
+
+# Parse a command's trailing options: --device PATH (repeatable), --all.
+parse_targets() {
+    TARGETS=()
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --device|-d)
+                shift
+                [ $# -gt 0 ] && TARGETS+=("$1")
+                ;;
+            --all|-a)
+                : # default behaviour; explicit for clarity
+                ;;
+        esac
+        shift
+    done
+}
+
+cmd=${1:-status}
+shift || true
+case "$cmd" in
+    list)
+        emit_list
+        ;;
+    status)
+        parse_targets "$@"
+        emit_status "${TARGETS[0]:-}"
+        ;;
+    off)
+        parse_targets "$@"
+        write_program "off" "${TARGETS[@]}"
+        ;;
+    write)
+        program=${1:-off}
+        shift || true
+        parse_targets "$@"
+        write_program "$program" "${TARGETS[@]}"
+        ;;
+    *)
+        printf '{"ok":false,"error":"Unknown command: %s"}\n' "$(json_escape "$cmd")"
+        exit 2
+        ;;
+esac
