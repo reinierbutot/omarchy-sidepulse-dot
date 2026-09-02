@@ -196,28 +196,9 @@ agent_state() {
             [ -n "$res" ] || res=$(stored_state "$agent")
             ;;
         grok)
-            # Prefer a fresh, precise pushed state if a hook reported; otherwise
-            # read its live event log.
-            pushed=$(stored_state "$agent")
-            fw=$(grok_state)
-            if [ -n "$pushed" ]; then
-                pst=${pushed%% *}; page=${pushed##* }
-            else
-                pst=""; page=99999
-            fi
-            if [ -n "$pushed" ]; then
-                if [ "$pst" = "done" ] || [ "$pst" = "idle" ] || [ "$pst" = "error" ]; then
-                    res=$pushed
-                elif [ "$page" -le 30 ] || [ -n "$fw" ]; then
-                    res=$pushed
-                else
-                    res="idle $page"
-                fi
-            elif [ -n "$fw" ]; then
-                res=$fw
-            else
-                res="idle 0"
-            fi
+            # grok's live event log is the authoritative source for turns and permissions.
+            res=$(grok_state)
+            [ -n "$res" ] || res=$(stored_state "$agent")
             ;;
         agy)
             # Prefer a precise pushed state from agy's lifecycle hooks.
@@ -234,7 +215,7 @@ agent_state() {
             if [ -n "$pushed" ]; then
                 if [ "$pst" = "done" ] || [ "$pst" = "idle" ] || [ "$pst" = "error" ]; then
                     res=$pushed
-                elif [ "$page" -le 30 ] || [ -n "$fw" ]; then
+                elif [ "$page" -le 30 ] || [ "${fw%% *}" = "working" ]; then
                     res=$pushed
                 else
                     res="idle $page"
@@ -382,44 +363,10 @@ JS
 
 install_grok() {
     local cfg="$HOME/.grok/config.toml"
-    [ -f "$cfg" ] || { echo "grok: config.toml not found (skipped)"; return 0; }
-    if grep -q 'sidepulse-agent report grok' "$cfg" 2>/dev/null; then
-        echo "grok: already wired"
-        return 0
+    if [ -f "$cfg" ] && grep -q 'sidepulse' "$cfg" 2>/dev/null; then
+        sed -i '/# --- SidePulse Dot/,/# --- end SidePulse Dot/d' "$cfg" 2>/dev/null || true
     fi
-    cp -f "$cfg" "$cfg.sidepulse.bak.$(date +%s)" 2>/dev/null || true
-    cat >> "$cfg" <<TOML
-
-# --- SidePulse Dot: report grok's state to the LED bridge (auto-generated) ---
-[[hooks.UserPromptSubmit]]
-  [[hooks.UserPromptSubmit.hooks]]
-  type = "command"
-  command = "$BRIDGE report grok working"
-  timeout = 5
-[[hooks.PreToolUse]]
-matcher = ".*"
-  [[hooks.PreToolUse.hooks]]
-  type = "command"
-  command = "$BRIDGE report grok working"
-  timeout = 5
-[[hooks.Notification]]
-  [[hooks.Notification.hooks]]
-  type = "command"
-  command = "$BRIDGE report grok waiting"
-  timeout = 5
-[[hooks.Stop]]
-  [[hooks.Stop.hooks]]
-  type = "command"
-  command = "$BRIDGE report grok done"
-  timeout = 5
-[[hooks.SessionEnd]]
-  [[hooks.SessionEnd.hooks]]
-  type = "command"
-  command = "$BRIDGE report grok idle"
-  timeout = 5
-# --- end SidePulse Dot ---
-TOML
-    echo "grok: appended hooks to $cfg"
+    echo "grok: reads ~/.grok/sessions (no install needed)"
 }
 
 # agy (Google Antigravity CLI): install lifecycle hooks into the global
