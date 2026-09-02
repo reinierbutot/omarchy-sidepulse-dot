@@ -475,6 +475,8 @@ Item {
     if (r.enabled) {
       if (reactionMode === "rolling") { rollingReset(); processRolling(agentList) }
       else applyReaction(true)
+    } else {
+      turnOff()
     }
   }
 

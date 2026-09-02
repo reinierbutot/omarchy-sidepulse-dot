@@ -156,24 +156,25 @@ grok_state() {
     if [ -n "$lreq" ] && { [ -z "$lres" ] || [ "$lreq" -gt "$lres" ]; }; then
         echo "waiting $age"; return 0
     fi
-    # Otherwise fall back to the most recent phase.
+    # Otherwise check if there is an active working phase.
     phase=$(printf '%s\n' "$tailbuf" | grep -oE '"phase":"[a-z_]+"' | tail -n1)
     phase=${phase##*:\"}; phase=${phase%\"}
     case "$phase" in
         permission_prompt) echo "waiting $age" ;;
-        "") echo "working $age" ;;
-        *) echo "working $age" ;;
+        streaming_*|tool_execution|waiting_for_model) echo "working $age" ;;
+        *) echo "idle $age" ;;
     esac
     return 0
 }
 
-# agy (Google Antigravity CLI) exposes no simple state file, but it keeps a
-# live activity trail under ~/.gemini/antigravity-cli. Very recent writes mean
-# it is actively working; when quiet we defer to any pushed hook state (below).
+# agy (Google Antigravity CLI) keeps conversation DBs and history under
+# ~/.gemini/antigravity-cli. Very recent conversation writes mean it is
+# actively working; we do NOT check cli.log as background pings (tokens,
+# model checks) write to it every ~6 mins even while completely idle.
 agy_state() {
     local base="$HOME/.gemini/antigravity-cli" f mt newest=0 age win
     [ -d "$base" ] || return 0
-    for f in "$base/cli.log" "$base/history.jsonl" "$base"/conversations/*.db; do
+    for f in "$base/history.jsonl" "$base"/conversations/*.db; do
         [ -e "$f" ] || continue
         mt=$(stat -L -c %Y "$f" 2>/dev/null) || continue
         [ -n "$mt" ] && [ "$mt" -gt "$newest" ] && newest=$mt
@@ -187,7 +188,7 @@ agy_state() {
 
 # Resolve the current state for one agent (file-watch agents override store).
 agent_state() {
-    local agent=$1 res pushed fw page win
+    local agent=$1 res pushed fw page win pst
     case "$agent" in
         junie)
             res=$(junie_state)
@@ -195,33 +196,53 @@ agent_state() {
             [ -n "$res" ] || res=$(stored_state "$agent")
             ;;
         grok)
-            # grok's config hooks do not reliably fire, so read its live event
-            # log; prefer a fresh pushed state if a hook ever does report.
+            # Prefer a fresh, precise pushed state if a hook reported; otherwise
+            # read its live event log.
             pushed=$(stored_state "$agent")
             fw=$(grok_state)
-            if [ -n "$pushed" ]; then page=${pushed##* }; else page=99999; fi
-            if [ -n "$pushed" ] && [ "${page:-99999}" -le 30 ]; then
-                res=$pushed
+            if [ -n "$pushed" ]; then
+                pst=${pushed%% *}; page=${pushed##* }
+            else
+                pst=""; page=99999
+            fi
+            if [ -n "$pushed" ]; then
+                if [ "$pst" = "done" ] || [ "$pst" = "idle" ] || [ "$pst" = "error" ]; then
+                    res=$pushed
+                elif [ "$page" -le 30 ] || [ -n "$fw" ]; then
+                    res=$pushed
+                else
+                    res="idle $page"
+                fi
             elif [ -n "$fw" ]; then
                 res=$fw
             else
-                res=$pushed
+                res="idle 0"
             fi
             ;;
         agy)
-            # Prefer a fresh, precise pushed state (from agy's Stop/PreInvocation
-            # hooks: done/error/working); otherwise infer "working" from live
-            # file activity so a running agy is detected even without hooks.
+            # Prefer a precise pushed state from agy's lifecycle hooks.
+            # When hooks report done, idle, or error, that definitive state holds.
+            # When working/waiting, keep it while fresh (or while conversation files are being written).
+            # If no hooks are installed, infer "working" from live conversation file activity.
             pushed=$(stored_state "$agent")
             fw=$(agy_state)
-            win=${SIDEPULSE_AGY_WINDOW:-25}
-            if [ -n "$pushed" ]; then page=${pushed##* }; else page=99999; fi
-            if [ -n "$pushed" ] && [ "${page:-99999}" -le "$win" ]; then
-                res=$pushed
+            if [ -n "$pushed" ]; then
+                pst=${pushed%% *}; page=${pushed##* }
+            else
+                pst=""; page=99999
+            fi
+            if [ -n "$pushed" ]; then
+                if [ "$pst" = "done" ] || [ "$pst" = "idle" ] || [ "$pst" = "error" ]; then
+                    res=$pushed
+                elif [ "$page" -le 30 ] || [ -n "$fw" ]; then
+                    res=$pushed
+                else
+                    res="idle $page"
+                fi
             elif [ -n "$fw" ]; then
                 res=$fw
             else
-                res=$pushed
+                res="idle 0"
             fi
             ;;
         *)     res=$(stored_state "$agent") ;;
