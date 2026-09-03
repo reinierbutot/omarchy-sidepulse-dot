@@ -18,6 +18,10 @@ that from a native panel.
     Animations) and the Custom-program field, kept out of the main view.
 - The **Reactions** screen has:
   - **Agent reactions** — see below.
+  - **Keep awake with lid closed** — a simple toggle that uses `systemd-inhibit`
+    to stop system sleep, idle locks, and lid-close suspension while agents are
+    active (`working` or `waiting`), plus a 5-minute grace period when done
+    before releasing power locks so your laptop stays on while tasks finish.
 - The **Manual** screen has:
   - **Control** — when more than one Dot is plugged in, a row of chips
     (**Dot 1**, **Dot 2**, …, **Both**) picks which Dot the colors, presets,

@@ -563,6 +563,74 @@ Panel {
             }
           }
 
+          // Keep awake with lid closed (systemd-inhibit sleep & lid switch).
+          Item {
+            width: parent.width
+            implicitHeight: Math.max(awakeCol.implicitHeight, awakeToggle.implicitHeight)
+
+            Column {
+              id: awakeCol
+              anchors.left: parent.left
+              anchors.right: awakeToggle.left
+              anchors.rightMargin: Style.space(10)
+              anchors.verticalCenter: parent.verticalCenter
+              spacing: Style.space(1)
+
+              Text {
+                width: parent.width
+                text: "Keep awake with lid closed"
+                color: root.foreground
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.body
+                font.bold: true
+              }
+
+              Text {
+                width: parent.width
+                text: dot.keepAwakeActive
+                  ? (dot.keepAwakeGraceRemaining > 0
+                      ? ("Awake active \u00b7 grace: " + dot.keepAwakeGraceRemaining + "s")
+                      : "Awake active \u00b7 lid-close sleep prevented")
+                  : "Prevents sleep & lid-close suspend while agents are busy"
+                color: dot.keepAwakeActive ? root.accent : root.dim
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+                wrapMode: Text.WordWrap
+              }
+            }
+
+            CursorSurface {
+              id: awakeToggle
+              anchors.right: parent.right
+              anchors.verticalCenter: parent.verticalCenter
+              foreground: root.foreground
+              implicitWidth: awakeText.implicitWidth + Style.space(20)
+              implicitHeight: awakeText.implicitHeight + Style.space(8)
+
+              Rectangle {
+                anchors.fill: parent
+                radius: height / 2
+                color: dot.keepAwakeEnabled ? root.alpha(root.accent, 0.22) : "transparent"
+                border.width: 1
+                border.color: dot.keepAwakeEnabled ? root.accent : root.alpha(root.foreground, 0.3)
+              }
+              MouseArea {
+                anchors.fill: parent
+                cursorShape: Qt.PointingHandCursor
+                onClicked: dot.setKeepAwakeEnabled(!dot.keepAwakeEnabled)
+              }
+              Text {
+                id: awakeText
+                anchors.centerIn: parent
+                text: dot.keepAwakeEnabled ? "On" : "Off"
+                color: dot.keepAwakeEnabled ? root.accent : root.dim
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+                font.bold: true
+              }
+            }
+          }
+
           // How the Dots share the agent statuses (only with 2+ Dots):
           //  - Merged: every reacting Dot shows the one merged status.
           //  - Latest per Dot: the Dots form a rolling window of the most

@@ -79,6 +79,15 @@ Item {
 
   readonly property bool reactionsEnabled: reactions && reactions.enabled === true
 
+  // --- Keep awake (sleep & lid-close inhibition) -------------------------
+  // Inhibits sleep, idle, and lid-close suspension while agents are active,
+  // with a 5-minute grace period when done/waiting before releasing locks.
+  readonly property bool keepAwakeEnabled: reactions && reactions.keepAwake === true
+  property bool keepAwakeActive: false
+  property int keepAwakeGraceRemaining: 0
+  property double keepAwakeGraceUntil: 0
+  property int graceSeconds: 300
+
   // How reactions drive the Dots:
   //   "merged"  - every reacting Dot shows one merged effective state (default).
   //   "rolling" - the Dots form a rolling window of the most recent statuses;
@@ -559,6 +568,59 @@ Item {
   property bool hooksBusy: false
   property string hooksResult: ""
 
+  function setKeepAwakeEnabled(on) {
+    var r = reactions ? JSON.parse(JSON.stringify(reactions)) : {}
+    r.keepAwake = on === true
+    reactions = r
+    saveReactions()
+    syncKeepAwake()
+  }
+
+  function syncKeepAwake() {
+    if (!keepAwakeEnabled) {
+      if (inhibitProc.running) inhibitProc.running = false
+      keepAwakeActive = false
+      keepAwakeGraceUntil = 0
+      keepAwakeGraceRemaining = 0
+      return
+    }
+
+    var now = Date.now() / 1000
+    var st = agentState
+
+    if (st === "working") {
+      keepAwakeGraceUntil = 0
+      keepAwakeGraceRemaining = 0
+      keepAwakeActive = true
+      if (!inhibitProc.running) inhibitProc.running = true
+    } else if (st === "waiting" || st === "done" || st === "error") {
+      if (keepAwakeGraceUntil === 0) {
+        keepAwakeGraceUntil = now + graceSeconds
+      }
+      if (now < keepAwakeGraceUntil) {
+        keepAwakeActive = true
+        keepAwakeGraceRemaining = Math.max(1, Math.round(keepAwakeGraceUntil - now))
+        if (!inhibitProc.running) inhibitProc.running = true
+      } else {
+        keepAwakeActive = false
+        keepAwakeGraceUntil = 0
+        keepAwakeGraceRemaining = 0
+        if (inhibitProc.running) inhibitProc.running = false
+      }
+    } else {
+      if (keepAwakeGraceUntil > 0 && now < keepAwakeGraceUntil) {
+        keepAwakeActive = true
+        keepAwakeGraceRemaining = Math.max(1, Math.round(keepAwakeGraceUntil - now))
+        if (!inhibitProc.running) inhibitProc.running = true
+      } else {
+        keepAwakeActive = false
+        keepAwakeGraceUntil = 0
+        keepAwakeGraceRemaining = 0
+        if (inhibitProc.running) inhibitProc.running = false
+      }
+    }
+  }
+
   function applyAgents(parsed) {
     if (!parsed) return
     agentList = (parsed.agents && parsed.agents.length !== undefined) ? parsed.agents : []
@@ -566,6 +628,7 @@ Item {
     var st = String(parsed.effective || "idle")
     var changed = st !== agentState
     agentState = st
+    syncKeepAwake()
     if (reactionMode === "rolling") processRolling(agentList)
     else if (changed) applyReaction(false)
   }
@@ -732,8 +795,35 @@ Item {
     running: true
     repeat: true
     triggeredOnStart: true
-    onTriggered: root.refreshAgents()
+    onTriggered: {
+      root.refreshAgents()
+      root.syncKeepAwake()
+    }
+  }
+
+  // Sleep & lid-close inhibitor process.
+  Process {
+    id: inhibitProc
+    running: false
+    command: [
+      "/usr/bin/systemd-inhibit",
+      "--what=handle-lid-switch:idle:sleep",
+      "--who=SidePulse Dot",
+      "--why=AI coding agent is active",
+      "--mode=block",
+      "sleep", "infinity"
+    ]
+    onExited: {
+      root.keepAwakeActive = false
+    }
+    stderr: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: if (text.trim() !== "") console.warn("sidepulse-inhibit", text.trim())
+    }
   }
 
   Component.onCompleted: root.loadReactions()
+  Component.onDestruction: {
+    if (inhibitProc.running) inhibitProc.running = false
+  }
 }
