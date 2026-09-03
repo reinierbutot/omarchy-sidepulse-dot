@@ -267,14 +267,29 @@ Panel {
             wrapMode: Text.WordWrap
           }
 
-          // --- Screen switcher ----------------------------------------
-          // Two screens: the primary "Reactions" screen and a "Manual"
-          // screen holding the demo controls + custom-program field.
-          Flow {
+          // --- Segmented screen switcher ------------------------------
+          Rectangle {
             width: parent.width
-            spacing: Style.space(6)
-            ScreenChip { label: "Reactions"; screenValue: "reactions" }
-            ScreenChip { label: "Manual"; screenValue: "manual" }
+            height: Style.space(38)
+            radius: Style.space(8)
+            color: root.alpha(root.foreground, 0.06)
+
+            RowLayout {
+              anchors.fill: parent
+              anchors.margins: Style.space(3)
+              spacing: Style.space(4)
+
+              TabSegment {
+                label: "Agent Reactions"
+                iconText: "󰚩"
+                screenValue: "reactions"
+              }
+              TabSegment {
+                label: "Manual Testing"
+                iconText: "󰌌"
+                screenValue: "manual"
+              }
+            }
           }
 
           // --- Target Dot ---------------------------------------------
@@ -492,6 +507,146 @@ Panel {
           width: parent.width
           spacing: Style.space(12)
 
+          // --- Live Agent & Power Dashboard Card ----------------------
+          Rectangle {
+            width: parent.width
+            radius: Style.space(10)
+            color: root.alpha(root.foreground, 0.04)
+            border.width: 1
+            border.color: root.alpha(root.foreground, 0.12)
+            implicitHeight: dashCol.implicitHeight + Style.space(22)
+
+            Column {
+              id: dashCol
+              anchors.left: parent.left
+              anchors.right: parent.right
+              anchors.top: parent.top
+              anchors.margins: Style.space(12)
+              spacing: Style.space(10)
+
+              // Live Agent Status Row
+              RowLayout {
+                width: parent.width
+                spacing: Style.space(10)
+
+                Rectangle {
+                  width: Style.space(12)
+                  height: Style.space(12)
+                  radius: width / 2
+                  color: root.stateColor(dot.agentState)
+                  border.width: dot.agentState === "working" ? 2 : 0
+                  border.color: root.alpha(root.stateColor(dot.agentState), 0.4)
+                  Layout.alignment: Qt.AlignVCenter
+                }
+
+                Column {
+                  Layout.fillWidth: true
+                  spacing: Style.space(1)
+
+                  Text {
+                    text: dot.agentState === "idle" || dot.agentState === ""
+                      ? "No Agent Active"
+                      : ((dot.agentActive !== "" ? dot.agentActive.toUpperCase() : "AGENT") + " \u00b7 " + root.stateLabel(dot.agentState).toUpperCase())
+                    color: root.foreground
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.bodySmall
+                    font.bold: true
+                    elide: Text.ElideRight
+                  }
+
+                  Text {
+                    text: dot.agentState === "working"
+                      ? "Coding agent is executing tasks..."
+                      : (dot.agentState === "waiting"
+                          ? "Waiting for your input / approval..."
+                          : "System ready for agent commands")
+                    color: root.dim
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.caption
+                    elide: Text.ElideRight
+                  }
+                }
+              }
+
+              // Card Divider
+              Rectangle {
+                width: parent.width
+                height: 1
+                color: root.alpha(root.foreground, 0.08)
+              }
+
+              // Keep Awake with Lid Closed Row
+              RowLayout {
+                width: parent.width
+                spacing: Style.space(10)
+
+                Text {
+                  text: dot.keepAwakeActive ? "󰅶" : "󰒲"
+                  color: dot.keepAwakeActive ? root.accent : root.dim
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.display
+                  Layout.alignment: Qt.AlignVCenter
+                }
+
+                Column {
+                  Layout.fillWidth: true
+                  spacing: Style.space(1)
+
+                  Text {
+                    text: "Keep Awake (Lid Closed)"
+                    color: root.foreground
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.bodySmall
+                    font.bold: true
+                  }
+
+                  Text {
+                    text: dot.keepAwakeActive
+                      ? (dot.keepAwakeGraceRemaining > 0
+                          ? ("Grace period \u00b7 " + dot.keepAwakeGraceRemaining + "s remaining")
+                          : "Active \u00b7 lid-close sleep prevented")
+                      : (dot.keepAwakeEnabled
+                          ? "Armed \u00b7 holds awake when agents work"
+                          : "Disabled \u00b7 laptop sleeps normally on lid close")
+                    color: dot.keepAwakeActive ? root.accent : root.dim
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.caption
+                    elide: Text.ElideRight
+                  }
+                }
+
+                CursorSurface {
+                  foreground: root.foreground
+                  implicitWidth: awakePillText.implicitWidth + Style.space(20)
+                  implicitHeight: awakePillText.implicitHeight + Style.space(8)
+                  Layout.alignment: Qt.AlignVCenter
+
+                  Rectangle {
+                    anchors.fill: parent
+                    radius: height / 2
+                    color: dot.keepAwakeEnabled ? root.alpha(root.accent, 0.22) : "transparent"
+                    border.width: 1
+                    border.color: dot.keepAwakeEnabled ? root.accent : root.alpha(root.foreground, 0.3)
+                  }
+                  MouseArea {
+                    anchors.fill: parent
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: dot.setKeepAwakeEnabled(!dot.keepAwakeEnabled)
+                  }
+                  Text {
+                    id: awakePillText
+                    anchors.centerIn: parent
+                    text: dot.keepAwakeEnabled ? "On" : "Off"
+                    color: dot.keepAwakeEnabled ? root.accent : root.dim
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.caption
+                    font.bold: true
+                  }
+                }
+              }
+            }
+          }
+
           PanelSeparator { foreground: root.foreground }
 
           Item {
@@ -531,99 +686,6 @@ Panel {
                 anchors.centerIn: parent
                 text: dot.reactionsEnabled ? "On" : "Off"
                 color: dot.reactionsEnabled ? root.accent : root.dim
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.caption
-                font.bold: true
-              }
-            }
-          }
-
-          // Live status: which agent is doing what right now.
-          RowLayout {
-            width: parent.width
-            spacing: Style.space(8)
-
-            Rectangle {
-              width: Style.space(10)
-              height: Style.space(10)
-              radius: width / 2
-              color: root.stateColor(dot.agentState)
-              Layout.alignment: Qt.AlignVCenter
-            }
-            Text {
-              Layout.fillWidth: true
-              text: dot.agentState === "idle" || dot.agentState === ""
-                ? "No agent active"
-                : ((dot.agentActive !== "" ? dot.agentActive : "agent")
-                   + " \u00b7 " + root.stateLabel(dot.agentState))
-              color: root.foreground
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.bodySmall
-              elide: Text.ElideRight
-            }
-          }
-
-          // Keep awake with lid closed (systemd-inhibit sleep & lid switch).
-          Item {
-            width: parent.width
-            implicitHeight: Math.max(awakeCol.implicitHeight, awakeToggle.implicitHeight)
-
-            Column {
-              id: awakeCol
-              anchors.left: parent.left
-              anchors.right: awakeToggle.left
-              anchors.rightMargin: Style.space(10)
-              anchors.verticalCenter: parent.verticalCenter
-              spacing: Style.space(1)
-
-              Text {
-                width: parent.width
-                text: "Keep awake with lid closed"
-                color: root.foreground
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.body
-                font.bold: true
-              }
-
-              Text {
-                width: parent.width
-                text: dot.keepAwakeActive
-                  ? (dot.keepAwakeGraceRemaining > 0
-                      ? ("Awake active \u00b7 grace: " + dot.keepAwakeGraceRemaining + "s")
-                      : "Awake active \u00b7 lid-close sleep prevented")
-                  : "Prevents sleep & lid-close suspend while agents are busy"
-                color: dot.keepAwakeActive ? root.accent : root.dim
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.caption
-                wrapMode: Text.WordWrap
-              }
-            }
-
-            CursorSurface {
-              id: awakeToggle
-              anchors.right: parent.right
-              anchors.verticalCenter: parent.verticalCenter
-              foreground: root.foreground
-              implicitWidth: awakeText.implicitWidth + Style.space(20)
-              implicitHeight: awakeText.implicitHeight + Style.space(8)
-
-              Rectangle {
-                anchors.fill: parent
-                radius: height / 2
-                color: dot.keepAwakeEnabled ? root.alpha(root.accent, 0.22) : "transparent"
-                border.width: 1
-                border.color: dot.keepAwakeEnabled ? root.accent : root.alpha(root.foreground, 0.3)
-              }
-              MouseArea {
-                anchors.fill: parent
-                cursorShape: Qt.PointingHandCursor
-                onClicked: dot.setKeepAwakeEnabled(!dot.keepAwakeEnabled)
-              }
-              Text {
-                id: awakeText
-                anchors.centerIn: parent
-                text: dot.keepAwakeEnabled ? "On" : "Off"
-                color: dot.keepAwakeEnabled ? root.accent : root.dim
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.caption
                 font.bold: true
@@ -705,20 +767,45 @@ Panel {
           CursorSurface {
             width: parent.width
             foreground: root.foreground
-            implicitHeight: hooksText.implicitHeight + Style.spacing.lg
-            MouseArea {
+            implicitHeight: Style.space(38)
+
+            Rectangle {
               anchors.fill: parent
+              radius: Style.space(8)
+              color: hooksHover.containsMouse ? root.alpha(root.foreground, 0.08) : root.alpha(root.foreground, 0.04)
+              border.width: 1
+              border.color: hooksHover.containsMouse ? root.accent : root.alpha(root.foreground, 0.15)
+            }
+
+            MouseArea {
+              id: hooksHover
+              anchors.fill: parent
+              hoverEnabled: true
               cursorShape: Qt.PointingHandCursor
               onClicked: dot.installHooks()
             }
-            Text {
-              id: hooksText
+
+            Row {
               anchors.centerIn: parent
-              text: dot.hooksBusy ? "Installing\u2026" : "Install agent hooks"
-              color: root.foreground
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.body
-              font.bold: true
+              spacing: Style.space(8)
+
+              Text {
+                text: "󰒓"
+                color: hooksHover.containsMouse ? root.accent : root.foreground
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.body
+                anchors.verticalCenter: parent.verticalCenter
+              }
+
+              Text {
+                id: hooksText
+                text: dot.hooksBusy ? "Installing Agent Hooks\u2026" : "Install Agent Hooks"
+                color: hooksHover.containsMouse ? root.accent : root.foreground
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.bodySmall
+                font.bold: true
+                anchors.verticalCenter: parent.verticalCenter
+              }
             }
           }
 
@@ -774,9 +861,19 @@ Panel {
             CursorSurface {
               Layout.fillWidth: true
               foreground: root.foreground
-              implicitHeight: applyText.implicitHeight + Style.spacing.lg
-              MouseArea {
+              implicitHeight: Style.space(36)
+
+              Rectangle {
                 anchors.fill: parent
+                radius: Style.space(8)
+                color: applyHover.containsMouse ? root.alpha(root.accent, 0.22) : root.alpha(root.foreground, 0.04)
+                border.width: 1
+                border.color: applyHover.containsMouse ? root.accent : root.alpha(root.foreground, 0.15)
+              }
+              MouseArea {
+                id: applyHover
+                anchors.fill: parent
+                hoverEnabled: true
                 cursorShape: Qt.PointingHandCursor
                 onClicked: root.applyCustom()
               }
@@ -784,9 +881,9 @@ Panel {
                 id: applyText
                 anchors.centerIn: parent
                 text: "Apply"
-                color: root.foreground
+                color: applyHover.containsMouse ? root.accent : root.foreground
                 font.family: root.fontFamily
-                font.pixelSize: Style.font.body
+                font.pixelSize: Style.font.bodySmall
                 font.bold: true
               }
             }
@@ -794,9 +891,19 @@ Panel {
             CursorSurface {
               Layout.fillWidth: true
               foreground: root.foreground
-              implicitHeight: offText.implicitHeight + Style.spacing.lg
-              MouseArea {
+              implicitHeight: Style.space(36)
+
+              Rectangle {
                 anchors.fill: parent
+                radius: Style.space(8)
+                color: custOffHover.containsMouse ? root.alpha(root.urgent, 0.22) : root.alpha(root.foreground, 0.04)
+                border.width: 1
+                border.color: custOffHover.containsMouse ? root.urgent : root.alpha(root.foreground, 0.15)
+              }
+              MouseArea {
+                id: custOffHover
+                anchors.fill: parent
+                hoverEnabled: true
                 cursorShape: Qt.PointingHandCursor
                 onClicked: dot.turnOff()
               }
@@ -806,7 +913,7 @@ Panel {
                 text: "Off"
                 color: root.urgent
                 font.family: root.fontFamily
-                font.pixelSize: Style.font.body
+                font.pixelSize: Style.font.bodySmall
                 font.bold: true
               }
             }
@@ -999,10 +1106,60 @@ Panel {
     }
   }
 
-  // One agent-state -> colour+animation mapping row: a live marker, a title,
-  // a Test button, a colour strip (click = set colour) and an animation strip
-  // (click = set pattern), chosen independently.
-  component ReactionRow: Column {
+  // Tab segment for the top screen switcher.
+  component TabSegment: CursorSurface {
+    id: tseg
+    property string label: ""
+    property string iconText: ""
+    property string screenValue: ""
+    readonly property bool active: root.screen === tseg.screenValue
+    Layout.fillWidth: true
+    Layout.fillHeight: true
+    foreground: root.foreground
+
+    Rectangle {
+      anchors.fill: parent
+      radius: Style.space(6)
+      color: tseg.active ? root.alpha(root.accent, 0.22) : (tsegHover.containsMouse ? root.alpha(root.foreground, 0.05) : "transparent")
+      border.width: tseg.active ? 1 : 0
+      border.color: tseg.active ? root.accent : "transparent"
+    }
+
+    MouseArea {
+      id: tsegHover
+      anchors.fill: parent
+      hoverEnabled: true
+      cursorShape: Qt.PointingHandCursor
+      onClicked: root.screen = tseg.screenValue
+    }
+
+    Row {
+      anchors.centerIn: parent
+      spacing: Style.space(6)
+
+      Text {
+        visible: tseg.iconText !== ""
+        text: tseg.iconText
+        color: tseg.active ? root.accent : root.dim
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.bodySmall
+        anchors.verticalCenter: parent.verticalCenter
+      }
+
+      Text {
+        text: tseg.label
+        color: tseg.active ? root.accent : root.foreground
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.bodySmall
+        font.bold: tseg.active
+        anchors.verticalCenter: parent.verticalCenter
+      }
+    }
+  }
+
+  // One agent-state -> colour+animation mapping card: a live marker, title,
+  // Test button, colour swatch strip, animation strip, and brightness slider.
+  component ReactionRow: Rectangle {
     id: rrow
     property string stateId: ""
     property string title: ""
@@ -1010,8 +1167,6 @@ Panel {
     readonly property string curHex: rrow.style.hex
     readonly property string curAnim: rrow.style.anim
     readonly property int curBrightness: rrow.style.brightness
-    // Live value while dragging the brightness slider; re-syncs to the stored
-    // value whenever it changes (e.g. after a write or state edit).
     property int dragBrightness: rrow.curBrightness
     onCurBrightnessChanged: rrow.dragBrightness = rrow.curBrightness
     readonly property bool isOff: rrow.curHex === ""
@@ -1023,262 +1178,284 @@ Panel {
         if (dot.animPresets[i].id === id) return dot.animPresets[i].label
       return id
     }
+
     width: parent ? parent.width : implicitWidth
-    spacing: Style.space(4)
+    radius: Style.space(8)
+    color: rrow.live ? root.alpha(root.accent, 0.08) : root.alpha(root.foreground, 0.035)
+    border.width: 1
+    border.color: rrow.live ? root.accent : root.alpha(root.foreground, 0.1)
+    implicitHeight: rrowCol.implicitHeight + Style.space(16)
 
-    RowLayout {
-      width: parent.width
-      spacing: Style.space(8)
+    Column {
+      id: rrowCol
+      anchors.left: parent.left
+      anchors.right: parent.right
+      anchors.top: parent.top
+      anchors.margins: Style.space(8)
+      spacing: Style.space(6)
 
-      // Preview / live indicator.
-      Rectangle {
-        width: Style.space(14)
-        height: Style.space(14)
-        radius: width / 2
-        color: rrow.program === "off" || rrow.program === "" ? "transparent" : rrow.previewHex
-        border.width: rrow.live ? 2 : 1
-        border.color: rrow.live ? root.accent : root.alpha(root.foreground, 0.3)
-        Layout.alignment: Qt.AlignVCenter
-      }
+      // Header row
+      RowLayout {
+        width: parent.width
+        spacing: Style.space(8)
 
-      Text {
-        Layout.fillWidth: true
-        text: rrow.title + (rrow.isOff ? "  \u00b7 off" : "  \u00b7 " + rrow.animLabel(rrow.curAnim))
-        color: rrow.live ? root.accent : root.foreground
-        font.family: root.fontFamily
-        font.pixelSize: Style.font.bodySmall
-        elide: Text.ElideRight
-      }
-
-      // Test button.
-      CursorSurface {
-        foreground: root.foreground
-        implicitWidth: testText.implicitWidth + Style.space(16)
-        implicitHeight: testText.implicitHeight + Style.space(6)
+        // Preview / live indicator.
         Rectangle {
-          anchors.fill: parent
-          radius: Style.space(6)
-          color: "transparent"
-          border.width: 1
-          border.color: root.alpha(root.foreground, 0.25)
-        }
-        MouseArea {
-          anchors.fill: parent
-          cursorShape: Qt.PointingHandCursor
-          onClicked: dot.testReaction(rrow.stateId)
-        }
-        Text {
-          id: testText
-          anchors.centerIn: parent
-          text: "Test"
-          color: root.foreground
-          font.family: root.fontFamily
-          font.pixelSize: Style.font.caption
-        }
-      }
-    }
-
-    // Colour strip: click a swatch to set only the colour for this state.
-    // An "off" chip blanks the Dots for this state.
-    Flow {
-      width: parent.width
-      spacing: Style.space(5)
-
-      Repeater {
-        model: root.palette
-        delegate: Rectangle {
-          id: rsw
-          required property var modelData
-          readonly property bool sel: !rrow.isOff
-            && rrow.previewHex.toLowerCase() === String(modelData.hex).toLowerCase()
-          width: Style.space(22)
-          height: Style.space(22)
+          width: Style.space(12)
+          height: Style.space(12)
           radius: width / 2
-          color: modelData.hex
-          border.width: rsw.sel ? 2 : 1
-          border.color: rsw.sel ? root.foreground : root.alpha(root.foreground, 0.25)
-
-          MouseArea {
-            anchors.fill: parent
-            hoverEnabled: true
-            cursorShape: Qt.PointingHandCursor
-            onClicked: dot.setReactionColor(rrow.stateId, rsw.modelData.hex)
-          }
+          color: rrow.program === "off" || rrow.program === "" ? "transparent" : rrow.previewHex
+          border.width: rrow.isOff ? 1 : 0
+          border.color: root.alpha(root.foreground, 0.3)
+          Layout.alignment: Qt.AlignVCenter
         }
-      }
 
-      // "Off" (dark) chip.
-      Rectangle {
-        width: Style.space(22)
-        height: Style.space(22)
-        radius: width / 2
-        color: "transparent"
-        border.width: rrow.isOff ? 2 : 1
-        border.color: rrow.isOff ? root.foreground : root.alpha(root.foreground, 0.3)
         Text {
-          anchors.centerIn: parent
-          text: "\u2205"
+          text: rrow.title
+          color: rrow.live ? root.accent : root.foreground
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.bodySmall
+          font.bold: true
+          Layout.alignment: Qt.AlignVCenter
+        }
+
+        Text {
+          Layout.fillWidth: true
+          text: rrow.isOff ? "\u00b7 Off" : ("\u00b7 " + rrow.animLabel(rrow.curAnim))
           color: root.dim
           font.family: root.fontFamily
           font.pixelSize: Style.font.caption
+          elide: Text.ElideRight
+          Layout.alignment: Qt.AlignVCenter
         }
-        MouseArea {
-          anchors.fill: parent
-          cursorShape: Qt.PointingHandCursor
-          onClicked: dot.setReactionOff(rrow.stateId)
+
+        // Live active indicator pill
+        Rectangle {
+          visible: rrow.live
+          radius: Style.space(4)
+          color: root.accent
+          implicitWidth: livePillText.implicitWidth + Style.space(10)
+          implicitHeight: livePillText.implicitHeight + Style.space(3)
+          Layout.alignment: Qt.AlignVCenter
+
+          Text {
+            id: livePillText
+            anchors.centerIn: parent
+            text: "ACTIVE"
+            color: Color.background || "#000000"
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.caption - 2
+            font.bold: true
+          }
         }
-      }
-    }
 
-    // Animation strip: pick the pattern the colour is rendered with,
-    // independent of the colour. Dimmed while the state is off.
-    Flow {
-      width: parent.width
-      spacing: Style.space(5)
-      opacity: rrow.isOff ? 0.4 : 1.0
-
-      Repeater {
-        model: dot.animPresets
-        delegate: CursorSurface {
-          id: achip
-          required property var modelData
-          readonly property bool active: !rrow.isOff && rrow.curAnim === String(modelData.id)
+        // Test button.
+        CursorSurface {
           foreground: root.foreground
-          implicitWidth: achipText.implicitWidth + Style.space(16)
-          implicitHeight: achipText.implicitHeight + Style.space(7)
+          implicitWidth: testText.implicitWidth + Style.space(16)
+          implicitHeight: testText.implicitHeight + Style.space(6)
+          Layout.alignment: Qt.AlignVCenter
 
           Rectangle {
             anchors.fill: parent
             radius: Style.space(6)
-            color: achip.active ? root.alpha(root.accent, 0.18) : "transparent"
-            border.width: achip.active ? 2 : 1
-            border.color: achip.active ? root.accent : root.alpha(root.foreground, 0.25)
+            color: testHover.containsMouse ? root.alpha(root.foreground, 0.1) : "transparent"
+            border.width: 1
+            border.color: testHover.containsMouse ? root.accent : root.alpha(root.foreground, 0.25)
           }
           MouseArea {
+            id: testHover
             anchors.fill: parent
-            enabled: !rrow.isOff
+            hoverEnabled: true
             cursorShape: Qt.PointingHandCursor
-            onClicked: dot.setReactionAnim(rrow.stateId, achip.modelData.id)
+            onClicked: dot.testReaction(rrow.stateId)
           }
           Text {
-            id: achipText
+            id: testText
             anchors.centerIn: parent
-            text: achip.modelData.label
-            color: achip.active ? root.accent : root.foreground
+            text: "Test"
+            color: testHover.containsMouse ? root.accent : root.foreground
             font.family: root.fontFamily
             font.pixelSize: Style.font.caption
-            font.bold: achip.active
+            font.bold: true
           }
         }
       }
-    }
 
-    // Brightness strip: set only this state's brightness, independent of the
-    // colour and animation. Dimmed while the state is off.
-    Item {
-      width: parent.width
-      implicitHeight: Style.space(20)
-      opacity: rrow.isOff ? 0.4 : 1.0
+      // Colour strip: click a swatch to set only the colour for this state.
+      Flow {
+        width: parent.width
+        spacing: Style.space(5)
 
-      Text {
-        id: rbLabel
-        anchors.left: parent.left
-        anchors.verticalCenter: parent.verticalCenter
-        text: "\u2600"
-        color: root.dim
-        font.family: root.fontFamily
-        font.pixelSize: Style.font.caption
-      }
+        Repeater {
+          model: root.palette
+          delegate: Rectangle {
+            id: rsw
+            required property var modelData
+            readonly property bool sel: !rrow.isOff
+              && rrow.previewHex.toLowerCase() === String(modelData.hex).toLowerCase()
+            width: Style.space(22)
+            height: Style.space(22)
+            radius: width / 2
+            color: modelData.hex
+            border.width: rsw.sel ? 2 : (rswHover.containsMouse ? 2 : 1)
+            border.color: rsw.sel ? root.foreground : (rswHover.containsMouse ? root.foreground : root.alpha(root.foreground, 0.25))
 
-      Text {
-        anchors.right: parent.right
-        anchors.verticalCenter: parent.verticalCenter
-        text: Math.round(rrow.dragBrightness / 255 * 100) + "%"
-        color: root.dim
-        font.family: root.fontFamily
-        font.pixelSize: Style.font.caption
-        width: Style.space(34)
-        horizontalAlignment: Text.AlignRight
-      }
-
-      Rectangle {
-        id: rbTrack
-        anchors.verticalCenter: parent.verticalCenter
-        anchors.left: rbLabel.right
-        anchors.leftMargin: Style.space(8)
-        anchors.right: parent.right
-        anchors.rightMargin: Style.space(40)
-        height: Style.space(6)
-        radius: height / 2
-        color: root.alpha(root.foreground, 0.18)
-
-        Rectangle {
-          anchors.left: parent.left
-          anchors.verticalCenter: parent.verticalCenter
-          height: parent.height
-          radius: parent.radius
-          width: parent.width * (rrow.dragBrightness - 8) / (255 - 8)
-          color: root.foreground
+            MouseArea {
+              id: rswHover
+              anchors.fill: parent
+              hoverEnabled: true
+              cursorShape: Qt.PointingHandCursor
+              onClicked: dot.setReactionColor(rrow.stateId, rsw.modelData.hex)
+            }
+          }
         }
 
+        // "Off" (dark) chip.
         Rectangle {
-          width: Style.space(14)
-          height: Style.space(14)
+          width: Style.space(22)
+          height: Style.space(22)
           radius: width / 2
-          color: root.foreground
-          anchors.verticalCenter: parent.verticalCenter
-          x: (rbTrack.width - width) * (rrow.dragBrightness - 8) / (255 - 8)
+          color: "transparent"
+          border.width: rrow.isOff ? 2 : (offHover.containsMouse ? 2 : 1)
+          border.color: rrow.isOff ? root.foreground : (offHover.containsMouse ? root.foreground : root.alpha(root.foreground, 0.3))
+          Text {
+            anchors.centerIn: parent
+            text: "\u2205"
+            color: rrow.isOff ? root.foreground : root.dim
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.caption
+            font.bold: rrow.isOff
+          }
+          MouseArea {
+            id: offHover
+            anchors.fill: parent
+            hoverEnabled: true
+            cursorShape: Qt.PointingHandCursor
+            onClicked: dot.setReactionOff(rrow.stateId)
+          }
+        }
+      }
+
+      // Animation strip: pick the pattern the colour is rendered with.
+      Flow {
+        width: parent.width
+        spacing: Style.space(5)
+        opacity: rrow.isOff ? 0.4 : 1.0
+
+        Repeater {
+          model: dot.animPresets
+          delegate: CursorSurface {
+            id: achip
+            required property var modelData
+            readonly property bool active: !rrow.isOff && rrow.curAnim === String(modelData.id)
+            foreground: root.foreground
+            implicitWidth: achipText.implicitWidth + Style.space(16)
+            implicitHeight: achipText.implicitHeight + Style.space(6)
+
+            Rectangle {
+              anchors.fill: parent
+              radius: Style.space(6)
+              color: achip.active ? root.alpha(root.accent, 0.22) : (achipHover.containsMouse ? root.alpha(root.foreground, 0.06) : "transparent")
+              border.width: achip.active ? 1 : 1
+              border.color: achip.active ? root.accent : root.alpha(root.foreground, 0.2)
+            }
+            MouseArea {
+              id: achipHover
+              anchors.fill: parent
+              hoverEnabled: true
+              enabled: !rrow.isOff
+              cursorShape: Qt.PointingHandCursor
+              onClicked: dot.setReactionAnim(rrow.stateId, achip.modelData.id)
+            }
+            Text {
+              id: achipText
+              anchors.centerIn: parent
+              text: achip.modelData.label
+              color: achip.active ? root.accent : root.foreground
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+              font.bold: achip.active
+            }
+          }
+        }
+      }
+
+      // Brightness strip: set only this state's brightness.
+      RowLayout {
+        width: parent.width
+        spacing: Style.space(8)
+        opacity: rrow.isOff ? 0.4 : 1.0
+
+        Text {
+          text: "\u2600"
+          color: root.dim
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.caption
+          Layout.alignment: Qt.AlignVCenter
         }
 
-        MouseArea {
-          anchors.fill: parent
-          anchors.margins: -Style.space(6)
-          enabled: !rrow.isOff
-          cursorShape: Qt.PointingHandCursor
-          function setFromX(mx) {
-            var ratio = root.clamp(mx / rbTrack.width, 0, 1)
-            rrow.dragBrightness = Math.round(8 + ratio * (255 - 8))
+        Item {
+          Layout.fillWidth: true
+          implicitHeight: Style.space(16)
+
+          Rectangle {
+            id: rbTrack
+            anchors.verticalCenter: parent.verticalCenter
+            width: parent.width
+            height: Style.space(4)
+            radius: height / 2
+            color: root.alpha(root.foreground, 0.18)
+
+            Rectangle {
+              anchors.left: parent.left
+              anchors.verticalCenter: parent.verticalCenter
+              height: parent.height
+              radius: parent.radius
+              width: parent.width * (rrow.dragBrightness - 8) / (255 - 8)
+              color: root.foreground
+            }
+
+            Rectangle {
+              width: Style.space(12)
+              height: Style.space(12)
+              radius: width / 2
+              color: root.foreground
+              anchors.verticalCenter: parent.verticalCenter
+              x: (rbTrack.width - width) * (rrow.dragBrightness - 8) / (255 - 8)
+            }
           }
-          onPressed: function(mouse) { setFromX(mouse.x) }
-          onPositionChanged: function(mouse) { if (pressed) setFromX(mouse.x) }
-          onReleased: dot.setReactionBrightness(rrow.stateId, rrow.dragBrightness)
+
+          MouseArea {
+            anchors.fill: parent
+            anchors.margins: -Style.space(4)
+            enabled: !rrow.isOff
+            cursorShape: Qt.PointingHandCursor
+            function setFromX(mx) {
+              var ratio = root.clamp(mx / rbTrack.width, 0, 1)
+              rrow.dragBrightness = Math.round(8 + ratio * (255 - 8))
+            }
+            onPressed: function(mouse) { setFromX(mouse.x) }
+            onPositionChanged: function(mouse) { if (pressed) setFromX(mouse.x) }
+            onReleased: dot.setReactionBrightness(rrow.stateId, rrow.dragBrightness)
+          }
+        }
+
+        Text {
+          text: Math.round(rrow.dragBrightness / 255 * 100) + "%"
+          color: root.dim
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.caption
+          Layout.preferredWidth: Style.space(32)
+          horizontalAlignment: Text.AlignRight
+          Layout.alignment: Qt.AlignVCenter
         }
       }
     }
   }
 
-  // A tab chip that switches the panel between its screens.
-  component ScreenChip: CursorSurface {
-    id: schip
-    property string label: ""
-    property string screenValue: ""
-    readonly property bool active: root.screen === schip.screenValue
-    foreground: root.foreground
-    implicitWidth: schipText.implicitWidth + Style.space(24)
-    implicitHeight: schipText.implicitHeight + Style.space(12)
-
-    Rectangle {
-      anchors.fill: parent
-      radius: Style.space(8)
-      color: schip.active ? root.alpha(root.accent, 0.18) : "transparent"
-      border.width: schip.active ? 2 : 1
-      border.color: schip.active ? root.accent : root.alpha(root.foreground, 0.25)
-    }
-    MouseArea {
-      anchors.fill: parent
-      cursorShape: Qt.PointingHandCursor
-      onClicked: root.screen = schip.screenValue
-    }
-    Text {
-      id: schipText
-      anchors.centerIn: parent
-      text: schip.label
-      color: schip.active ? root.accent : root.foreground
-      font.family: root.fontFamily
-      font.pixelSize: Style.font.body
-      font.bold: schip.active
-    }
-  }
+  // Backward-compatibility alias for ScreenChip
+  component ScreenChip: TabSegment {}
 
   component InfoRow: RowLayout {
     property string label: ""
