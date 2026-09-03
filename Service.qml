@@ -128,9 +128,14 @@ Item {
   readonly property var animPresets: [
     { id: "solid",     label: "Solid" },
     { id: "pulse",     label: "Breathe" },
+    { id: "cascade",   label: "Step-in" },
+    { id: "chase",     label: "Chase" },
+    { id: "wave",      label: "Wave" },
+    { id: "shimmer",   label: "Shimmer" },
+    { id: "beacon",    label: "Beacon" },
+    { id: "heartbeat", label: "Heartbeat" },
     { id: "blink",     label: "Blink" },
-    { id: "fastblink", label: "Fast" },
-    { id: "heartbeat", label: "Heartbeat" }
+    { id: "fastblink", label: "Fast" }
   ]
 
   // Build the LED program for a colour rendered with an animation. An empty
@@ -141,10 +146,14 @@ Item {
     if (!hex || hex === "") return "off"
     switch (String(anim)) {
       case "pulse":     return pre + "off\n" + hex + " 1.6s pulse\nrepeat"
+      case "cascade":   return pre + "0:" + hex + " 1:#000000 300ms ease\n0:" + hex + " 1:" + hex + " 400ms ease\noff 250ms cosine\nrepeat"
+      case "chase":     return pre + "0:" + hex + " 1:#000000 250ms none\n0:#000000 1:" + hex + " 250ms none\nrepeat"
+      case "wave":      return pre + "0:" + hex + " 1.2s pulse 0ms; 1:" + hex + " 1.2s pulse 400ms\nrepeat"
+      case "shimmer":   return pre + "0:" + hex + " 1:#000000 150ms none\n0:#000000 1:" + hex + " 150ms none\n" + hex + " 200ms pulse\noff 120ms none\nrepeat"
+      case "beacon":    return pre + hex + " 80ms none\noff 80ms none\n" + hex + " 80ms none\noff 700ms none\nrepeat"
+      case "heartbeat": return pre + hex + " 220ms pulse\noff 120ms none\n" + hex + " 220ms pulse\noff 700ms none\nrepeat"
       case "blink":     return pre + hex + " 400ms none\noff 400ms none\nrepeat"
       case "fastblink": return pre + hex + " 150ms none\noff 150ms none\nrepeat"
-      case "heartbeat": return pre + hex + " 220ms pulse\noff 120ms none\n"
-                              + hex + " 220ms pulse\noff 700ms none\nrepeat"
       default:          return pre + hex
     }
   }
@@ -159,8 +168,13 @@ Item {
     var bm = p.match(/brightness\s+(\d+)/)
     var brightness = bm ? clampBrightness(parseInt(bm[1], 10)) : 255
     var anim = "solid"
-    if (/pulse/.test(p) && /off/.test(p) && /repeat/.test(p) && !/220ms/.test(p)) anim = "pulse"
+    if (/pulse 0ms.*pulse 400ms/.test(p)) anim = "wave"
+    else if (/300ms ease.*400ms ease/.test(p) || /cascade/.test(p)) anim = "cascade"
+    else if (/0:.*1:#000000.*0:#000000.*1:/.test(p) || /chase/.test(p)) anim = "chase"
+    else if (/150ms none.*200ms pulse/.test(p) || /shimmer/.test(p)) anim = "shimmer"
+    else if (/80ms none.*700ms none/.test(p) || /beacon/.test(p)) anim = "beacon"
     else if (/220ms pulse/.test(p)) anim = "heartbeat"
+    else if (/pulse/.test(p) && /off/.test(p) && /repeat/.test(p)) anim = "pulse"
     else if (/1\d\dms none/.test(p) || /150ms/.test(p) || /200ms/.test(p)) anim = "fastblink"
     else if (/none/.test(p) && /repeat/.test(p)) anim = "blink"
     return { hex: hex, anim: anim, brightness: brightness }

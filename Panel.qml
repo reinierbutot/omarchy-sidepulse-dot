@@ -477,6 +477,26 @@ Panel {
             spacing: Style.space(6)
 
             PresetButton {
+              label: "Step-in (one at a time)"
+              program: "0:#00ff88 1:#000000 300ms ease\n0:#00ff88 1:#00ff88 400ms ease\noff 250ms cosine\nrepeat"
+            }
+            PresetButton {
+              label: "Side-to-side chase"
+              program: "0:#00c8ff 1:#000000 250ms none\n0:#000000 1:#00c8ff 250ms none\nrepeat"
+            }
+            PresetButton {
+              label: "Smooth phase wave"
+              program: "0:#8800ff 1.2s pulse 0ms; 1:#8800ff 1.2s pulse 400ms\nrepeat"
+            }
+            PresetButton {
+              label: "Neural shimmer"
+              program: "0:#ffd400 1:#000000 150ms none\n0:#000000 1:#ffd400 150ms none\n#ffd400 200ms pulse\noff 120ms none\nrepeat"
+            }
+            PresetButton {
+              label: "Beacon double-flash"
+              program: "#ff3a80 80ms none\noff 80ms none\n#ff3a80 80ms none\noff 700ms none\nrepeat"
+            }
+            PresetButton {
               label: "Breathing cyan"
               program: "off\n#00c8ff 1.6s pulse\nrepeat"
             }
